@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en-us">
+
+<head>
+    <base href="https://cdn.jsdelivr.net/gh/genizy/web-port@main/pizza-tower/">
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="viewport-fit=cover, width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0" />
+    <link rel="icon" type="x-icon" href="favicon.png">
+    <title>Pizza Tower - Mac Optimized Port</title>
+    <link rel="stylesheet" href="index.css">
+    <style>
+        /* Mac-specific CSS for sharper pixel art on Retina displays */
+        canvas {
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            display: block;
+            margin: 0 auto;
+            background-color: black;
+        }
+        body {
+            background-color: #000;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+    
+    <div id="pauseMenuContainer" hidden>
+        <div id="pauseMenuBorder">
+            <div id="pauseMenu">
+                <button id="resumeButton" onclick="resume()"> Resume </button>
+                <button id="quitButton" onclick="quitIfSupported()"> Quit </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="loading">
+        <div class="spinner" id="spinner"></div>
+        <div class="emscripten" id="status">Preparing for Mac/Safari...</div>
+        <progress value="0" max="100" id="progress" hidden="1"></progress>
+    </div>
+
+    <div class="output-container" id="output-container">
+        <div id="message-container">
+            <div id="messages"></div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * Safari-Optimized File Merger
+         * Prevents "Exception Thrown" by allocating a single continuous block of memory
+         */
+        async function mergeFiles(fileParts) {
+            const statusElement = document.getElementById('status');
+            try {
+                statusElement.innerText = "Downloading game assets...";
+                
+                // Fetch all parts
+                const responses = await Promise.all(fileParts.map(part => fetch(part)));
+                const buffers = await Promise.all(responses.map(res => res.arrayBuffer()));
+
+                statusElement.innerText = "Processing memory for Safari...";
+                
+                // Calculate total size for a single allocation
+                const totalLength = buffers.reduce((acc, b) => acc + b.byteLength, 0);
+                const mergedArray = new Uint8Array(totalLength);
+
+                // Copy buffers into the single array
+                let offset = 0;
+                for (const buffer of buffers) {
+                    mergedArray.set(new Uint8Array(buffer), offset);
+                    offset += buffer.byteLength;
+                }
+
+                // Create a single Blob with a defined type
+                const mergedBlob = new Blob([mergedArray], { type: 'application/octet-stream' });
+                return URL.createObjectURL(mergedBlob);
+            } catch (err) {
+                statusElement.innerHTML = "Error: Asset loading failed. Check your connection.";
+                console.error("Merge error:", err);
+                throw err;
+            }
+        }
+
+        function getParts(file, start, end) {
+            let parts = [];
+            for (let i = start; i <= end; i++) {
+                parts.push(file + ".part" + i);
+            }
+            return parts;
+        }
+
+        // Initialize Loading
+        mergeFiles(getParts("game.unx", 1, 13)).then(url => {
+            window.gameUnxUrl = url;
+
+            // Patch Fetch for Safari 
+            const originalFetch = window.fetch;
+            window.fetch = async function (...args) {
+                let [requestUrl, options] = args;
+                if (typeof requestUrl === 'string' && requestUrl.includes("game.unx")) {
+                    requestUrl = window.gameUnxUrl;
+                } else if (requestUrl instanceof Request && requestUrl.url.includes("game.unx")) {
+                    requestUrl = new Request(window.gameUnxUrl, requestUrl);
+                }
+                return originalFetch.call(this, requestUrl, options);
+            };
+
+            // Patch XHR for Safari
+            const originalOpen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function (method, xhrUrl, ...rest) {
+                if (typeof xhrUrl === 'string' && xhrUrl.includes("game.unx")) {
+                    xhrUrl = window.gameUnxUrl;
+                }
+                return originalOpen.call(this, method, xhrUrl, ...rest);
+            };
+
+            // Load game engine scripts sequentially
+            const scripts = ["index.js", "runner.js"];
+            let loadedCount = 0;
+
+            function loadNextScript() {
+                if (loadedCount >= scripts.length) return;
+                
+                let script = document.createElement("script");
+                script.src = scripts[loadedCount];
+                script.async = false; 
+                script.onload = () => {
+                    loadedCount++;
+                    loadNextScript();
+                };
+                document.body.appendChild(script);
+            }
+
+            loadNextScript();
+
+        }).catch(error => {
+            document.getElementById('status').innerText = "Critical Exception: " + error.message;
+        });
+
+        // Prevent Mac System shortcuts from interfering with the game
+        window.addEventListener('keydown', function(e) {
+            if (e.metaKey && (e.key === 'r' || e.key === 'w')) {
+                console.log("System shortcut prevented to stay in-game.");
+            }
+        }, false);
+    </script>      
+</body>
+
+</html>
