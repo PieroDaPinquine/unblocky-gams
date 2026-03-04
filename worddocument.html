@@ -1,0 +1,77 @@
+/**
+ * Ultra-Optimized Asset Loader for Safari
+ * Optimized for memory efficiency and execution timing.
+ */
+async function startSafariEngine() {
+    const status = document.getElementById('status');
+    const parts = [];
+    
+    // 1. Generate parts list for game.unx.part1 to part13
+    for (let i = 1; i <= 13; i++) {
+        parts.push(`game.unx.part${i}`);
+    }
+
+    try {
+        status.innerText = "Downloading Assets...";
+        // Fetch all parts in parallel
+        const responses = await Promise.all(parts.map(p => fetch(p)));
+        
+        // Verify all downloads succeeded
+        if (responses.some(r => !r.ok)) throw new Error("Network error downloading parts.");
+
+        // 2. Optimized Memory Handling: Convert to ArrayBuffers
+        const buffers = await Promise.all(responses.map(r => r.arrayBuffer()));
+        
+        status.innerText = "Mounting Virtual Drive...";
+        
+        // 3. Zero-Copy Blob: This avoids the "Double RAM" crash in Safari
+        const gameBlob = new Blob(buffers, { type: 'application/octet-stream' });
+        const gameUrl = URL.createObjectURL(gameBlob);
+
+        // 4. Global Interception Patch
+        const applyPatch = (target) => {
+            const originalFetch = window.fetch;
+            window.fetch = async (...args) => {
+                let [url, opts] = args;
+                const urlString = (url instanceof Request) ? url.url : url;
+                if (urlString.includes("game.unx")) {
+                    return originalFetch(gameUrl, opts);
+                }
+                return originalFetch(...args);
+            };
+
+            const originalXHR = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+                if (typeof url === 'string' && url.includes("game.unx")) {
+                    url = gameUrl;
+                }
+                return originalXHR.call(this, method, url, ...rest);
+            };
+        };
+
+        applyPatch();
+
+        // 5. Sequential Script Injection
+        // We load these ONLY after the patch is confirmed active
+        const loadScript = (src) => {
+            return new Promise((resolve) => {
+                const s = document.createElement('script');
+                s.src = src;
+                s.async = false;
+                s.onload = resolve;
+                document.body.appendChild(s);
+            });
+        };
+
+        status.innerText = "Launching...";
+        await loadScript("index.js");
+        await loadScript("runner.js");
+
+    } catch (err) {
+        status.innerText = "Error: " + err.message;
+        console.error("Boot Failure:", err);
+    }
+}
+
+// Start the sequence
+startSafariEngine();
