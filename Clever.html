@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+    <base href="https://cdn.jsdelivr.net/gh/genizy/web-port@main/pizza-tower/">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="viewport-fit=cover, width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0" />
+    <title>Clever|Portal</title>
+    <style>
+        body { background-color: #000; margin: 0; overflow: hidden; font-family: -apple-system, sans-serif; }
+        canvas { display: block; margin: 0 auto; width: 100vw; height: 100vh; object-fit: contain; image-rendering: pixelated; }
+        #ui-layer { position: absolute; top: 10px; right: 10px; z-index: 100; display: flex; gap: 8px; opacity: 0.2; transition: opacity 0.3s; }
+        #ui-layer:hover { opacity: 1; }
+        .btn { background: rgba(40, 40, 40, 0.9); color: white; border: 1px solid #555; padding: 8px 12px; cursor: pointer; border-radius: 5px; font-size: 11px; font-weight: bold; }
+        .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <button class="btn" onclick="downloadSaves()">Backup Saves</button>
+        <button class="btn" onclick="document.getElementById('fileInput').click()">Upload Save</button>
+        <input type="file" id="fileInput" style="display:none" onchange="uploadSaves(this)" multiple>
+    </div>
+
+    <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+    
+    <div class="loading" id="loader">
+        <div id="load-text">Checking Kitchen...</div>
+    </div>
+
+    <script>
+        // Renamed to 'myStatus' to avoid conflict with index.js
+        const myStatus = document.getElementById('load-text');
+        
+        window.Module = {
+            canvas: document.getElementById('canvas'),
+            arguments: ["-game", "game.unx"],
+            preRun: [function() {
+                try {
+                    FS.mkdir('/saves');
+                    FS.mount(IDBFS, {}, '/saves');
+                    Module.addRunDependency('syncfs');
+                    FS.syncfs(true, (err) => {
+                        Module.removeRunDependency('syncfs');
+                    });
+                } catch(e) {}
+            }],
+            postRun: []
+        };
+
+        function downloadSaves() {
+            if (!window.FS) return;
+            const files = FS.readdir('/saves').filter(f => !f.startsWith('.'));
+            files.forEach(file => {
+                const data = FS.readFile(`/saves/${file}`);
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(new Blob([data]));
+                a.download = file;
+                a.click();
+            });
+        }
+
+        function uploadSaves(input) {
+            Array.from(input.files).forEach(file => {
+                const reader = new FileReader();
+                reader.onload = function() {
+                    FS.writeFile(`/saves/${file.name}`, new Uint8Array(this.result));
+                    FS.syncfs(false, () => alert("Uploaded! Refresh to play."));
+                };
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        async function loadGame(fileParts) {
+            try {
+                const buffers = [];
+                for (let i = 0; i < fileParts.length; i++) {
+                    myStatus.innerText = `Fetching Ingredients: ${Math.round(((i+1)/fileParts.length)*100)}%`;
+                    const res = await fetch(fileParts[i]);
+                    if (!res.ok) throw new Error("CORS or Network Error");
+                    buffers.push(await res.arrayBuffer());
+                }
+                const merged = new Uint8Array(buffers.reduce((a, b) => a + b.byteLength, 0));
+                let offset = 0;
+                buffers.forEach(b => { merged.set(new Uint8Array(b), offset); offset += b.byteLength; });
+                return URL.createObjectURL(new Blob([merged]));
+            } catch (err) {
+                myStatus.innerHTML = "<b>Security Blocked!</b><br>Safari cannot load files from your desktop.<br>Please use a web server.";
+            }
+        }
+
+        function getParts(f, s, e) { return Array.from({length: e-s+1}, (_, i) => `${f}.part${i+s}`); }
+
+        loadGame(getParts("game.unx", 1, 13)).then(url => {
+            if (!url) return;
+            window.gameUnxUrl = url;
+
+            // Update XHR to handle the stitched game file
+            const oldXHR = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function(m, u) {
+                if (typeof u === 'string' && u.includes("game.unx")) arguments[1] = window.gameUnxUrl;
+                return oldXHR.apply(this, arguments);
+            };
+
+            // Loading index first, then runner
+            const s1 = document.createElement("script");
+            s1.src = "index.js";
+            s1.crossOrigin = "anonymous";
+            s1.onload = () => {
+                const s2 = document.createElement("script");
+                s2.src = "runner.js";
+                s2.crossOrigin = "anonymous";
+                s2.onload = () => { document.getElementById('loader').style.display = 'none'; };
+                document.body.appendChild(s2);
+            };
+            document.body.appendChild(s1);
+        });
+    </script>
+</body>
+</html>
